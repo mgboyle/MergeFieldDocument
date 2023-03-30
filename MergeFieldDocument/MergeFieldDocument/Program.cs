@@ -1,42 +1,61 @@
 using System;
 using System.IO;
-using Microsoft.Office.Interop.Word;
+using System.Linq;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Newtonsoft.Json.Linq;
 
-namespace WordMerge
+namespace OpenXmlMergeJson
 {
     class Program
     {
         static void Main(string[] args)
         {
-            // Set the path to the JSON file and Word template document
             string jsonFilePath = args[0];
             string templateDocumentPath = args[1];
+            string outputFilePath = Path.GetFileNameWithoutExtension(templateDocumentPath) + "_merged.docx";
 
-            // Read the JSON data from the file
             string json = File.ReadAllText(jsonFilePath);
             JObject data = JObject.Parse(json);
 
-            // Create a new Word document
-            Application word = new Application();
-            Document doc = word.Documents.Add(templateDocumentPath);
+            File.Copy(templateDocumentPath, outputFilePath, true);
 
-            // Loop through the fields in the document and replace them with the data from the JSON
-            foreach (Field field in doc.Fields)
+            using (WordprocessingDocument doc = WordprocessingDocument.Open(outputFilePath, true))
             {
-                string fieldName = field.Code.Text.Trim().Replace("MERGEFIELD", "").Trim();
-                if (data[fieldName] != null)
+                // Get the main document part
+                MainDocumentPart mainPart = doc.MainDocumentPart;
+
+                // Find all SimpleField elements in the document
+                var simpleFields = mainPart.Document.Descendants<SimpleField>().ToList();
+
+                // Replace the merge fields with the corresponding values from the JSON object
+                foreach (var field in simpleFields)
                 {
-                    field.Select();
-                    word.Selection.TypeText(data[fieldName].ToString());
+                    string fieldName = GetFieldName(field);
+
+                    if (data[fieldName] != null)
+                    {
+                        Text text = new Text(data[fieldName].ToString());
+                        Run run = new Run(new RunProperties(field.Run.RunProperties), text);
+                        field.Parent.ReplaceChild(run, field);
+                    }
                 }
+
+                // Save the changes to the document
+                mainPart.Document.Save();
+            }
+        }
+
+        private static string GetFieldName(SimpleField field)
+        {
+            string[] parts = field.Instruction.Value.Split(' ');
+
+            if (parts.Length >= 3 && parts[0] == "MERGEFIELD")
+            {
+                return parts[1].Trim();
             }
 
-            // Save the merged document and close Word
-            string outputFilePath = Path.GetFileNameWithoutExtension(templateDocumentPath) + "_" + data["refno"].ToString() + ".docx";
-            doc.SaveAs2(outputFilePath, WdSaveFormat.wdFormatDocumentDefault);
-            doc.Close();
-            word.Quit();
+            return null;
         }
     }
 }
